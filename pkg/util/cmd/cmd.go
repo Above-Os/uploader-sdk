@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -90,94 +88,4 @@ func (c *Command) Run() (string, error) {
 	}
 
 	return result, nil
-}
-
-// ! feiqi
-func (c *Command) RunEx() (string, error) {
-	var err error
-	c.cmd = exec.CommandContext(c.ctx, c.options.Path, c.options.Args...)
-	c.cmd.Env = append(os.Environ(), c.cmd.Env...)
-
-	for k, v := range c.options.Envs {
-		c.cmd.Env = append(c.cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	stdout, err := c.cmd.StdoutPipe()
-	if err != nil {
-		return "", errors.Wrap(err, "stdout pipe error")
-	}
-
-	stderr, err := c.cmd.StderrPipe()
-	if err != nil {
-		return "", errors.Wrap(err, "stderr pipe error")
-	}
-
-	fmt.Printf("\n>>>> Running command: %s\n\n", c.cmd.String())
-	if err := c.cmd.Start(); err != nil {
-		return "", errors.Wrap(err, "cmd start error")
-	}
-
-	defer close(c.Ch)
-
-	var stdoutBuffer, stderrBuffer bytes.Buffer
-	stdoutDone := make(chan error)
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			select {
-			case <-c.ctx.Done():
-				stdoutDone <- nil
-				return
-			default:
-				line := scanner.Bytes()
-				c.Ch <- line
-				stdoutBuffer.WriteString(string(line))
-				l := strings.TrimSpace(string(line))
-				if l == "" {
-					return
-				}
-				if c.options.Print {
-					fmt.Println(l)
-				}
-			}
-		}
-		stdoutDone <- scanner.Err()
-	}()
-
-	stderrDone := make(chan error)
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			select {
-			case <-c.ctx.Done():
-				stderrDone <- nil
-				return
-			default:
-				line := scanner.Bytes()
-				l := strings.TrimSpace(string(line))
-				stderrBuffer.WriteString(l)
-				if l != "" {
-					break
-				}
-			}
-		}
-		stderrDone <- scanner.Err()
-		return
-	}()
-
-	if err := <-stdoutDone; err != nil {
-		return "", errors.Wrap(err, "stdout scanner error")
-	}
-	if err := <-stderrDone; err != nil {
-		return "", errors.Wrap(err, "stderr scanner error")
-	}
-	c.cmd.Wait()
-
-	stdoutResult := stdoutBuffer.String()
-	stderrResult := stderrBuffer.String()
-
-	if stderrResult != "" {
-		return stdoutResult, errors.New(stderrResult)
-	}
-	return stdoutResult, nil
 }

@@ -19,13 +19,14 @@ type Upload struct {
 }
 
 type Option struct {
-	Name           string
-	UserName       string
-	Password       string
-	CloudName      string
-	CloudRegion    string
-	UploadPath     string
-	CloudApiMirror string
+	Name            string
+	UserName        string
+	Password        string
+	CloudName       string
+	CloudRegion     string
+	UploadPath      string
+	CloudApiMirror  string
+	LimitUploadRate string
 }
 
 func (u *Upload) Upload(opt Option) error {
@@ -35,13 +36,14 @@ func (u *Upload) Upload(opt Option) error {
 	u.option = opt
 
 	var storageClient = &storage.StorageClient{
-		Name:           opt.Name,
-		UserName:       opt.UserName,
-		CloudName:      opt.CloudName,
-		CloudRegion:    opt.CloudRegion,
-		Password:       opt.Password,
-		UploadPath:     opt.UploadPath,
-		CloudApiMirror: opt.CloudApiMirror,
+		Name:            u.option.Name,
+		UserName:        u.option.UserName,
+		Password:        u.option.Password,
+		CloudName:       u.option.CloudName,
+		CloudRegion:     u.option.CloudRegion,
+		UploadPath:      u.option.UploadPath,
+		CloudApiMirror:  u.option.CloudApiMirror,
+		LimitUploadRate: u.option.LimitUploadRate,
 	}
 
 	var (
@@ -59,7 +61,7 @@ func (u *Upload) Upload(opt Option) error {
 		}
 		summary = e.Summary
 	case <-ctx.Done():
-		err = errors.Errorf("backup %q osdata timed out in 2 hour", opt.Name)
+		err = errors.Errorf("backup %q osdata timed out in 2 hour", u.option.Name)
 	}
 
 	if err != nil {
