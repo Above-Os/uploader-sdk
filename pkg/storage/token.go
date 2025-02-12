@@ -41,8 +41,8 @@ type OlaresSpace struct {
 }
 
 type OlaresSpaceSession struct {
-	Cloud      string `json:"cloud"`  // "aws", "tencentcloud"
-	Bucket     string `json:"bucket"` // "terminus-us-west-1", "backup-ap-beijing-1331576471"
+	Cloud      string `json:"cloud"` // "aws", "tencentcloud"
+	Bucket     string `json:"bucket"`
 	Token      string `json:"st"`
 	Prefix     string `json:"prefix"` // "fbcf5f573ed242c28758-342957450633", "did:key:???-55c06979be5e"
 	Secret     string `json:"sk"`
@@ -61,11 +61,11 @@ type AccountResponse struct {
 type AccountResponseRawData struct {
 	RefreshToken string `json:"refresh_token"`
 	AccessToken  string `json:"access_token"`
-	ExpiresIn    int64  `json:"expires_in"`
-	ExpiresAt    int64  `json:"expires_at"`
-	UserId       string `json:"userid"`
-	Available    bool   `json:"available"`
-	CreateAt     int64  `json:"create_at"`
+	// ExpiresIn    int64  `json:"expires_in"`
+	ExpiresAt int64  `json:"expires_at"`
+	UserId    string `json:"userid"`
+	Available bool   `json:"available"`
+	CreateAt  int64  `json:"create_at"`
 }
 
 type AccountResponseData struct {
@@ -134,6 +134,14 @@ func (t *OlaresSpace) GetEnv() map[string]string {
 }
 
 func (t *OlaresSpace) RefreshToken(isDebug bool) error {
+	if t.UserId != "" && t.UserToken != "" {
+		err := t.setToken(isDebug)
+		if err == nil {
+			return nil
+		}
+		fmt.Println("set token error", err)
+	}
+
 	podIp, err := t.getPodIp()
 	if err != nil {
 		return err
@@ -148,7 +156,6 @@ func (t *OlaresSpace) RefreshToken(isDebug bool) error {
 	if err != nil {
 		return err
 	}
-
 	t.UserId = userId
 	t.UserToken = userToken
 
