@@ -2,6 +2,8 @@ module bytetrade.io/web3os/uploader-sdk
 
 go 1.22.0
 
+toolchain go1.22.4
+
 require (
 	github.com/emicklei/go-restful/v3 v3.12.1
 	github.com/go-resty/resty/v2 v2.16.5
