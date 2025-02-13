@@ -71,6 +71,16 @@ func PrettyJSON(v any) string {
 	return buf.String()
 }
 
+func CreateDir(path string) error {
+	if IsExist(path) == false {
+		err := os.MkdirAll(path, os.ModePerm)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func IsExist(path string) bool {
 	_, err := os.Stat(path)
 	if err != nil {

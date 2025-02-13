@@ -8,6 +8,7 @@ require (
 	github.com/emicklei/go-restful/v3 v3.12.1
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/pkg/errors v0.9.1
+	go.uber.org/zap v1.19.1
 	k8s.io/apiextensions-apiserver v0.32.1
 	k8s.io/apimachinery v0.32.1
 	k8s.io/client-go v0.32.1
@@ -43,6 +44,8 @@ require (
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	go.uber.org/atomic v1.7.0 // indirect
+	go.uber.org/multierr v1.6.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.23.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect

@@ -2,11 +2,11 @@ package upload
 
 import (
 	"context"
-	"fmt"
 
 	"bytetrade.io/web3os/uploader-sdk/pkg/restic"
 	"bytetrade.io/web3os/uploader-sdk/pkg/storage"
 	"bytetrade.io/web3os/uploader-sdk/pkg/util"
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
 )
 
@@ -19,14 +19,15 @@ type Upload struct {
 }
 
 type Option struct {
-	Name            string
-	UserName        string
-	Password        string
-	CloudName       string
-	CloudRegion     string
-	UploadPath      string
-	CloudApiMirror  string
-	LimitUploadRate string
+	Name                 string
+	UserName             string
+	Password             string
+	CloudName            string
+	CloudRegion          string
+	UploadPath           string
+	CloudApiMirror       string
+	LimitUploadRate      string
+	StorageTokenDuration string
 }
 
 func (u *Upload) Upload(opt Option) error {
@@ -36,14 +37,15 @@ func (u *Upload) Upload(opt Option) error {
 	u.option = opt
 
 	var storageClient = &storage.StorageClient{
-		Name:            u.option.Name,
-		UserName:        u.option.UserName,
-		Password:        u.option.Password,
-		CloudName:       u.option.CloudName,
-		CloudRegion:     u.option.CloudRegion,
-		UploadPath:      u.option.UploadPath,
-		CloudApiMirror:  u.option.CloudApiMirror,
-		LimitUploadRate: u.option.LimitUploadRate,
+		Name:                 u.option.Name,
+		UserName:             u.option.UserName,
+		Password:             u.option.Password,
+		CloudName:            u.option.CloudName,
+		CloudRegion:          u.option.CloudRegion,
+		UploadPath:           u.option.UploadPath,
+		CloudApiMirror:       u.option.CloudApiMirror,
+		LimitUploadRate:      u.option.LimitUploadRate,
+		StorageTokenDuration: u.option.StorageTokenDuration,
 	}
 
 	var (
@@ -69,7 +71,7 @@ func (u *Upload) Upload(opt Option) error {
 	}
 
 	if summary != nil {
-		fmt.Println("backup summary: ", util.PrettyJSON(summary))
+		logger.Infof("upload successful, data: %s", util.ToJSON(summary))
 	}
 
 	return nil

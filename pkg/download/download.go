@@ -2,11 +2,11 @@ package download
 
 import (
 	"context"
-	"fmt"
 
 	"bytetrade.io/web3os/uploader-sdk/pkg/restic"
 	"bytetrade.io/web3os/uploader-sdk/pkg/storage"
 	"bytetrade.io/web3os/uploader-sdk/pkg/util"
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
 )
 
@@ -19,15 +19,16 @@ type Download struct {
 }
 
 type Option struct {
-	Name              string
-	SnapshotId        string
-	UserName          string
-	Password          string
-	CloudName         string
-	CloudRegion       string
-	DownloadPath      string
-	CloudApiMirror    string
-	LimitDownloadRate string
+	Name                 string
+	SnapshotId           string
+	UserName             string
+	Password             string
+	CloudName            string
+	CloudRegion          string
+	DownloadPath         string
+	CloudApiMirror       string
+	LimitDownloadRate    string
+	StorageTokenDuration string
 }
 
 func (d *Download) Download(opt Option) error {
@@ -35,15 +36,16 @@ func (d *Download) Download(opt Option) error {
 	defer cancel()
 	d.option = opt
 	var storageClient = &storage.StorageClient{
-		Name:              d.option.Name,
-		SnapshotId:        d.option.SnapshotId,
-		UserName:          d.option.UserName,
-		Password:          d.option.Password,
-		CloudName:         d.option.CloudName,
-		CloudRegion:       d.option.CloudRegion,
-		DownloadPath:      d.option.DownloadPath,
-		CloudApiMirror:    d.option.CloudApiMirror,
-		LimitDownloadRate: d.option.LimitDownloadRate,
+		Name:                 d.option.Name,
+		SnapshotId:           d.option.SnapshotId,
+		UserName:             d.option.UserName,
+		Password:             d.option.Password,
+		CloudName:            d.option.CloudName,
+		CloudRegion:          d.option.CloudRegion,
+		DownloadPath:         d.option.DownloadPath,
+		CloudApiMirror:       d.option.CloudApiMirror,
+		LimitDownloadRate:    d.option.LimitDownloadRate,
+		StorageTokenDuration: d.option.StorageTokenDuration,
 	}
 
 	var (
@@ -69,7 +71,7 @@ func (d *Download) Download(opt Option) error {
 	}
 
 	if summary != nil {
-		fmt.Println("restore summary: ", util.PrettyJSON(summary))
+		logger.Infof("download successful, data: %s", util.ToJSON(summary))
 	}
 
 	return nil

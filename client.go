@@ -2,11 +2,15 @@ package uploadersdk
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
 
 	downloader "bytetrade.io/web3os/uploader-sdk/pkg/download"
 	uploader "bytetrade.io/web3os/uploader-sdk/pkg/upload"
 	"bytetrade.io/web3os/uploader-sdk/pkg/util"
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
+	"go.uber.org/zap"
 )
 
 func init() {
@@ -30,29 +34,54 @@ type UploadClientOption struct {
 	CloudApiMirror       string
 	LimitUploadRate      string
 	StorageTokenDuration string
+	BaseDir              string
+	Version              string
+	Logger               *zap.SugaredLogger
 }
 
 // upload
 func NewUploadClient(opt *UploadClientOption,
 ) *UploadClient {
 	var o = uploader.Option{
-		Name:            opt.Name,
-		UserName:        opt.UserName,
-		Password:        opt.Password,
-		CloudName:       opt.CloudName,
-		CloudRegion:     opt.CloudRegion,
-		UploadPath:      opt.UploadPath,
-		CloudApiMirror:  opt.CloudApiMirror,
-		LimitUploadRate: opt.LimitUploadRate,
+		Name:                 opt.Name,
+		UserName:             opt.UserName,
+		Password:             opt.Password,
+		CloudName:            opt.CloudName,
+		CloudRegion:          opt.CloudRegion,
+		UploadPath:           opt.UploadPath,
+		CloudApiMirror:       opt.CloudApiMirror,
+		LimitUploadRate:      opt.LimitUploadRate,
+		StorageTokenDuration: opt.StorageTokenDuration,
 	}
-	return &UploadClient{
+
+	var client = &UploadClient{
 		option: o,
 	}
+
+	client.setLogger(opt.BaseDir, opt.Version, opt.Logger)
+
+	return client
 }
 
 func (c *UploadClient) Upload() error {
 	u := &uploader.Upload{}
 	return u.Upload(c.option)
+}
+
+func (c *UploadClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
+	if log != nil {
+		logger.SetLogger(log)
+		return
+	}
+
+	installerPath := filepath.Join(baseDir, "versions", fmt.Sprintf("v%s", version))
+	if err := util.CreateDir(installerPath); err != nil {
+		panic(err)
+	}
+
+	jsonLogDir := path.Join(baseDir, "logs")
+	consoleLogDir := path.Join(installerPath, "logs", "backup_upload.log")
+	logger.InitLog(jsonLogDir, consoleLogDir, true)
 }
 
 //  download
@@ -72,6 +101,9 @@ type DownloadClientOption struct {
 	CloudApiMirror       string
 	LimitDownloadRate    string
 	StorageTokenDuration string
+	BaseDir              string
+	Version              string
+	Logger               *zap.SugaredLogger
 }
 
 func NewDownloadClient(opt *DownloadClientOption) *DownloadClient {
@@ -86,9 +118,14 @@ func NewDownloadClient(opt *DownloadClientOption) *DownloadClient {
 		CloudApiMirror:    opt.CloudApiMirror,
 		LimitDownloadRate: opt.LimitDownloadRate,
 	}
-	return &DownloadClient{
+
+	var client = &DownloadClient{
 		option: o,
 	}
+
+	client.setLogger(opt.BaseDir, opt.Version, opt.Logger)
+
+	return client
 }
 
 func (c *DownloadClient) Download() error {
@@ -99,4 +136,20 @@ func (c *DownloadClient) Download() error {
 	d := &downloader.Download{}
 
 	return d.Download(c.option)
+}
+
+func (c *DownloadClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
+	if log != nil {
+		logger.SetLogger(log)
+		return
+	}
+
+	installerPath := filepath.Join(baseDir, "versions", fmt.Sprintf("v%s", version))
+	if err := util.CreateDir(installerPath); err != nil {
+		panic(err)
+	}
+
+	jsonLogDir := path.Join(baseDir, "logs")
+	consoleLogDir := path.Join(installerPath, "logs", "backup_download.log")
+	logger.InitLog(jsonLogDir, consoleLogDir, true)
 }

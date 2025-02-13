@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
 )
 
@@ -59,7 +60,7 @@ func (c *Command) Run() (string, error) {
 	}
 	c.cmd.Stderr = c.cmd.Stdout
 
-	fmt.Printf("[Cmd] %s\n", c.cmd.String())
+	logger.Infof("[Cmd] %s", c.cmd.String())
 	if err := c.cmd.Start(); err != nil {
 		return "", errors.Wrap(err, "cmd start error")
 	}

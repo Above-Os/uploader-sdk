@@ -11,6 +11,7 @@ import (
 
 	"bytetrade.io/web3os/uploader-sdk/pkg/util"
 	"bytetrade.io/web3os/uploader-sdk/pkg/util/cmd"
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 )
@@ -42,14 +43,14 @@ const (
 	resticFile = "restic"
 	tolerance  = 1e-9
 
-	PRINT_START_MESSAGE    = "[Upload] start, files: %d, size: %s\n"
-	PRINT_PROGRESS_MESSAGE = "[Upload] progress %s, files: %d/%d, size: %s/%s, current: %v\n"
-	PRINT_FINISH_MESSAGE   = "[Upload] finished, files: %d, size: %s, please waiting...\n"
+	PRINT_START_MESSAGE    = "[Upload] start, files: %d, size: %s"
+	PRINT_PROGRESS_MESSAGE = "[Upload] progress %s, files: %d/%d, size: %s/%s, current: %v"
+	PRINT_FINISH_MESSAGE   = "[Upload] finished, files: %d, size: %s, please waiting..."
 
-	PRINT_RESTORE_START_MESSAGE    = "[Download] start, files: %d, size: %s\n"
-	PRINT_RESTORE_PROGRESS_MESSAGE = "[Download] progress %s, files: %d/%d, size: %s/%s\n"
-	PRINT_RESTORE_ITEM             = "[Download] restored file: %s, size: %s\n"
-	PRINT_RESTORE_FINISH_MESSAGE   = "[Download] snapshot %s finished, total files: %d, restored files: %d, total size: %s, restored size: %s, please waiting...\n"
+	PRINT_RESTORE_START_MESSAGE    = "[Download] start, files: %d, size: %s"
+	PRINT_RESTORE_PROGRESS_MESSAGE = "[Download] progress %s, files: %d/%d, size: %s/%s"
+	PRINT_RESTORE_ITEM             = "[Download] restored file: %s, size: %s"
+	PRINT_RESTORE_FINISH_MESSAGE   = "[Download] snapshot %s finished, total files: %d, restored files: %d, total size: %s, restored size: %s, please waiting..."
 	PRINT_SUCCESS_MESSAGE          = ""
 )
 
@@ -68,6 +69,8 @@ type Restic interface {
 type resticManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
+	name   string
+	user   string
 	envs   map[string]string
 	bin    string
 	opt    *Option
@@ -106,7 +109,7 @@ func (o *Option) downloadRate() string {
 	return fmt.Sprintf("--limit-download=%d", res)
 }
 
-func NewRestic(ctx context.Context, envs map[string]string, opt *Option) (Restic, error) {
+func NewRestic(ctx context.Context, name string, userName string, envs map[string]string, opt *Option) (Restic, error) {
 	var commandPath, err = util.GetCommand(resticFile)
 	if err != nil {
 		return nil, err
@@ -115,6 +118,8 @@ func NewRestic(ctx context.Context, envs map[string]string, opt *Option) (Restic
 	return &resticManager{
 		ctx:    ctxRestic,
 		cancel: cancel,
+		name:   name,
+		user:   userName,
 		envs:   envs,
 		bin:    commandPath,
 		opt:    opt,
@@ -158,6 +163,7 @@ func (r *resticManager) Init() (*InitSummaryOutput, error) {
 					continue
 				}
 				var msg = string(res)
+				logger.Debugf("[restic] init %s message: %s", r.name, msg)
 				if strings.Contains(msg, "Fatal: ") {
 					switch {
 					case strings.Contains(msg, ERROR_MESSAGE_ALREADY_INITIALIZED.Error()):
@@ -235,9 +241,9 @@ func (r *resticManager) Backup(name string, folder string, filePathPrefix string
 
 				status := messagePool.Get()
 				if err := json.Unmarshal(res, status); err != nil {
-					messagePool.Put(status)
 					var msg = string(res)
-
+					logger.Debugf("[restic] backup %s error message: %s", r.name, msg)
+					messagePool.Put(status)
 					switch {
 					case strings.Contains(msg, ERROR_MESSAGE_TOKEN_EXPIRED.Error()):
 						errorMsg = ERROR_MESSAGE_TOKEN_EXPIRED
@@ -257,34 +263,32 @@ func (r *resticManager) Backup(name string, folder string, filePathPrefix string
 				case "status":
 					switch {
 					case math.Abs(status.PercentDone-0.0) < tolerance:
-						fmt.Printf(PRINT_START_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
+						logger.Infof(PRINT_START_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
 					case math.Abs(status.PercentDone-1.0) < tolerance:
 						if !finished {
-							fmt.Printf(PRINT_FINISH_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
+							logger.Infof(PRINT_FINISH_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
 							finished = true
 						}
 					default:
 						if prevPercent != status.PercentDone {
-							fmt.Printf(PRINT_PROGRESS_MESSAGE,
+							logger.Infof(PRINT_PROGRESS_MESSAGE,
 								status.GetPercentDone(),
 								status.FilesDone,
 								status.TotalFiles,
 								util.FormatBytes(status.BytesDone),
 								util.FormatBytes(status.TotalBytes),
-								r.fileNameTidy(status.CurrentFiles, filePathPrefix),
-							)
+								r.fileNameTidy(status.CurrentFiles, filePathPrefix))
 						}
 						prevPercent = status.PercentDone
 					}
 				case "summary":
 					if err := json.Unmarshal(res, &summary); err != nil {
+						logger.Debugf("[restic] backup %s error summary unmarshal message: %s", r.name, string(res))
 						messagePool.Put(status)
+						errorMsg = RESTIC_ERROR_MESSAGE(err.Error())
+						c.Cancel()
 						return
 					}
-					fmt.Printf("all succeed, blobs: %d, snapshot: %s\n",
-						summary.DataBlobs,
-						summary.SnapshotID,
-					)
 					messagePool.Put(status)
 					return
 				}
@@ -320,10 +324,9 @@ func (r *resticManager) Repair() error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(res)
+
 		if strings.Contains(res, ERROR_MESSAGE_LOCKED.Error()) {
-			ures, _ := r.Unlock()
-			fmt.Println(ures)
+			r.Unlock()
 			return fmt.Errorf("retry")
 		}
 		return nil
@@ -353,6 +356,7 @@ func (r *resticManager) repairIndex() (string, error) {
 				if res == nil || len(res) == 0 {
 					continue
 				}
+				logger.Debugf("[restic] repair %s message: %s", r.name, string(res))
 				sb.WriteString(string(res) + "\n")
 			case <-r.ctx.Done():
 				return
@@ -386,6 +390,7 @@ func (r *resticManager) Unlock() (string, error) {
 				if res == nil || len(res) == 0 {
 					continue
 				}
+				logger.Debugf("[restic] unlock %s message: %s", r.name, string(res))
 				sb.WriteString(string(res) + "\n")
 			case <-r.ctx.Done():
 				return
@@ -431,7 +436,8 @@ func (r *resticManager) GetSnapshot(snapshotId string) (*Snapshot, error) {
 				}
 
 				var msg = string(res)
-				if strings.Contains(msg, "Fatal") {
+				logger.Debugf("[restic] snapshots %s message: %s", r.name, msg)
+				if strings.Contains(msg, "Fatal: ") {
 					switch {
 					case strings.Contains(msg, ERROR_MESSAGE_SNAPSHOT_NOT_FOUND.Error()):
 						errorMsg = ERROR_MESSAGE_SNAPSHOT_NOT_FOUND
@@ -508,8 +514,9 @@ func (r *resticManager) Restore(snapshotId string, uploadPath string, target str
 
 				status := restoreMessagePool.Get()
 				if err := json.Unmarshal(res, status); err != nil {
-					restoreMessagePool.Put(status)
 					var msg = string(res)
+					logger.Debugf("[restic] restore %s error message: %s", r.name, msg)
+					restoreMessagePool.Put(status)
 
 					switch {
 					case strings.Contains(msg, ERROR_MESSAGE_TOKEN_EXPIRED.Error()):
@@ -531,17 +538,18 @@ func (r *resticManager) Restore(snapshotId string, uploadPath string, target str
 					switch {
 					case math.Abs(status.PercentDone-0.0) < tolerance:
 						if !started {
-							fmt.Printf(PRINT_RESTORE_START_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
+							logger.Infof(PRINT_RESTORE_START_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
 							started = true
 						}
 					case math.Abs(status.PercentDone-1.0) < tolerance:
 						if !finished {
-							fmt.Printf(PRINT_RESTORE_FINISH_MESSAGE, snapshotId, status.TotalFiles, status.FilesRestored, util.FormatBytes(status.TotalBytes), util.FormatBytes(status.BytesRestored))
+
+							logger.Infof(PRINT_RESTORE_FINISH_MESSAGE, snapshotId, status.TotalFiles, status.FilesRestored, util.FormatBytes(status.TotalBytes), util.FormatBytes(status.BytesRestored))
 							finished = true
 						}
 					default:
 						if prevPercent != status.PercentDone {
-							fmt.Printf(PRINT_RESTORE_PROGRESS_MESSAGE,
+							logger.Infof(PRINT_RESTORE_PROGRESS_MESSAGE,
 								status.GetPercentDone(),
 								status.FilesRestored,
 								status.TotalFiles,
@@ -558,9 +566,10 @@ func (r *resticManager) Restore(snapshotId string, uploadPath string, target str
 						c.Cancel()
 						return
 					}
-					fmt.Printf(PRINT_RESTORE_ITEM, rvu.Item, util.FormatBytes(rvu.Size))
+					logger.Infof(PRINT_RESTORE_ITEM, rvu.Item, util.FormatBytes(rvu.Size))
 				case "summary":
 					if err := json.Unmarshal(res, &summary); err != nil {
+						logger.Debugf("[restic] restore %s error summary unmarshal message: %s", r.name, string(res))
 						restoreMessagePool.Put(status)
 						errorMsg = RESTIC_ERROR_MESSAGE(err.Error())
 						c.Cancel()
@@ -600,5 +609,5 @@ func (r *resticManager) fileNameTidy(f []string, prefix string) []string {
 }
 
 func (r *resticManager) withTag(name string) []string {
-	return []string{"--tag", fmt.Sprintf("%s", name)}
+	return []string{"--tag", fmt.Sprintf("name=%s", name)}
 }

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/tls"
+	"strconv"
 
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"bytetrade.io/web3os/uploader-sdk/pkg/common"
 	"bytetrade.io/web3os/uploader-sdk/pkg/response"
 	"bytetrade.io/web3os/uploader-sdk/pkg/util"
+	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
 	"github.com/emicklei/go-restful/v3"
 	"github.com/go-resty/resty/v2"
 	"github.com/pkg/errors"
@@ -35,7 +37,7 @@ type OlaresSpace struct {
 	CloudRegion        string              `json:"cloud_region"`
 	UploadPath         string              `json:"upload_path"`
 	CloudApiMirror     string              `json:"cloud_api_mirror"`
-	Duration           time.Duration       `json:"duration"`
+	Duration           string              `json:"duration"`
 	OlaresSpaceSession *OlaresSpaceSession `json:"olares_space_session"`
 	Env                map[string]string   `json:"env"`
 }
@@ -119,7 +121,7 @@ func (t *OlaresSpace) SetEnv() {
 	t.Env["RESTIC_REPOSITORY"] = t.OlaresSpaceSession.RepoUrl
 	t.Env["RESTIC_PASSWORD"] = t.OlaresSpaceSession.Password
 
-	fmt.Printf("export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_SESSION_TOKEN=%s\nexport RESTIC_REPOSITORY=%s\nexport RESTIC_PASSWORD=%s\nexport AWS_REGION=%s\n",
+	msg := fmt.Sprintf("export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_SESSION_TOKEN=%s\nexport RESTIC_REPOSITORY=%s\nexport RESTIC_PASSWORD=%s\nexport AWS_REGION=%s\n",
 		t.OlaresSpaceSession.Key,
 		t.OlaresSpaceSession.Secret,
 		t.OlaresSpaceSession.Token,
@@ -127,6 +129,8 @@ func (t *OlaresSpace) SetEnv() {
 		t.OlaresSpaceSession.Password,
 		t.OlaresSpaceSession.Region,
 	)
+	fmt.Println(msg)
+	logger.Debugf(msg)
 }
 
 func (t *OlaresSpace) GetEnv() map[string]string {
@@ -135,11 +139,12 @@ func (t *OlaresSpace) GetEnv() map[string]string {
 
 func (t *OlaresSpace) RefreshToken(isDebug bool) error {
 	if t.UserId != "" && t.UserToken != "" {
+		logger.Infof("retrieving olares space token, userid: %s, usertoken: %s", t.UserId, t.UserToken)
 		err := t.setToken(isDebug)
 		if err == nil {
 			return nil
 		}
-		fmt.Println("set token error", err)
+		logger.Info("failed to obtain olares space token, retrying, please wait...")
 	}
 
 	podIp, err := t.getPodIp()
@@ -152,6 +157,7 @@ func (t *OlaresSpace) RefreshToken(isDebug bool) error {
 		return err
 	}
 
+	logger.Infof("retrieving user %s token", t.UserName)
 	userId, userToken, err := t.getUserToken(podIp, appKey)
 	if err != nil {
 		return err
@@ -272,7 +278,7 @@ func (t *OlaresSpace) getAppKey() (string, error) {
 func (t *OlaresSpace) getUserToken(podIp string, appKey string) (userid, token string, err error) {
 	terminusNonce, err := util.GenTerminusNonce(appKey)
 	if err != nil {
-		fmt.Println("generate nonce error, ", err)
+		logger.Errorf("generate nonce error: %v", err)
 		return
 	}
 	var settingsUrl = fmt.Sprintf("http://%s/legacy/v1alpha1/service.settings/v1/api/account/retrieve", podIp)
@@ -280,7 +286,7 @@ func (t *OlaresSpace) getUserToken(podIp string, appKey string) (userid, token s
 	client := resty.New().SetTimeout(10 * time.Second)
 	var data = make(map[string]string)
 	data["name"] = fmt.Sprintf("integration-account:space:%s", t.AccountName)
-	fmt.Println("fetch account from settings, ", settingsUrl)
+	logger.Infof("fetch account from settings: %s", settingsUrl)
 	resp, err := client.R().SetDebug(true).
 		SetHeader(restful.HEADER_ContentType, restful.MIME_JSON).
 		SetHeader("Terminus-Nonce", terminusNonce).
@@ -289,29 +295,31 @@ func (t *OlaresSpace) getUserToken(podIp string, appKey string) (userid, token s
 		Post(settingsUrl)
 
 	if err != nil {
-		fmt.Println("request settings account api error, ", err)
 		return
 	}
 
 	if resp.StatusCode() != http.StatusOK {
-		fmt.Println("request settings account api response not ok, ", resp.StatusCode())
+		err = errors.WithStack(fmt.Errorf("request settings account api response not ok, status: %d", resp.StatusCode()))
 		return
 	}
 
 	accountResp := resp.Result().(*AccountResponse)
 
-	if accountResp.Code != 0 {
-		fmt.Println("request settings account api response error, ", accountResp.Code, ", ", accountResp.Message)
+	if accountResp.Code == 1 && accountResp.Message == "" {
+		err = errors.WithStack(fmt.Errorf("\nOlares Space is not enabled. Please go to the Settings - Integration page in the LarePass App to add Space\n"))
+		return
+	} else if accountResp.Code != 0 {
+		err = errors.WithStack(fmt.Errorf("request settings account api response error, status: %d, message: %s", accountResp.Code, accountResp.Message))
 		return
 	}
 
 	if accountResp.Data == nil || accountResp.Data.RawData == nil {
-		fmt.Println("request settings account api response data is nil, ", accountResp.Code, ", ", accountResp.Message)
+		err = errors.WithStack(fmt.Errorf("request settings account api response data is nil, status: %d, message: %s", accountResp.Code, accountResp.Message))
 		return
 	}
 
 	if accountResp.Data.RawData.UserId == "" || accountResp.Data.RawData.AccessToken == "" {
-		fmt.Println("access token invalid")
+		err = errors.WithStack(fmt.Errorf("access token invalid"))
 		return
 	}
 
@@ -321,46 +329,94 @@ func (t *OlaresSpace) getUserToken(podIp string, appKey string) (userid, token s
 	return
 }
 
+func (t *OlaresSpace) GetToken() {
+	t.setToken(false)
+}
+
 func (t *OlaresSpace) setToken(isDebug bool) error {
-	var serverDomain = util.DefaultValue(common.DefaultCloudApiUrl, t.CloudApiMirror)
-
-	serverURL := fmt.Sprintf("%s/v1/resource/stsToken/backup", strings.TrimRight(serverDomain, "/"))
-
-	httpClient := resty.New().SetTimeout(15 * time.Second).SetDebug(true).SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
-	resp, err := httpClient.R().
-		SetFormData(map[string]string{
-			"userid":          t.UserId,
-			"token":           t.UserToken,
-			"cloudName":       t.CloudName,
-			"region":          t.CloudRegion,
-			"clusterId":       util.MD5(t.UploadPath),
-			"durationSeconds": fmt.Sprintf("%.0f", t.Duration.Seconds()),
-		}).
-		SetResult(&CloudStorageAccountResponse{}).
-		Post(serverURL)
-
-	if err != nil {
-		return errors.WithStack(fmt.Errorf("fetch data from cloud error: %v, url: %s", err, serverURL))
+	var backoff = wait.Backoff{
+		Duration: 3 * time.Second,
+		Factor:   2,
+		Jitter:   0.1,
+		Steps:    3,
 	}
 
-	if resp.StatusCode() != http.StatusOK {
-		return errors.WithStack(fmt.Errorf("fetch data from cloud response error: %d, data: %s", resp.StatusCode(), resp.Body()))
-	}
+	if err := retry.OnError(backoff, func(err error) bool {
+		return true
+	}, func() error {
+		var serverDomain = util.DefaultValue(common.DefaultCloudApiUrl, t.CloudApiMirror)
 
-	queryResp := resp.Result().(*CloudStorageAccountResponse)
-	if queryResp.Code != http.StatusOK {
-		return errors.WithStack(fmt.Errorf("get cloud storage account from cloud error: %d, data: %s",
-			queryResp.Code, queryResp.Message))
-	}
+		serverURL := fmt.Sprintf("%s/v1/resource/stsToken/backup", strings.TrimRight(serverDomain, "/"))
 
-	if queryResp.Data == nil {
-		return errors.WithStack(fmt.Errorf("get cloud storage account from cloud data is empty, code: %d, data: %s", queryResp.Code, queryResp.Message))
-	}
+		httpClient := resty.New().SetTimeout(15 * time.Second).SetDebug(true).SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+		resp, err := httpClient.R().
+			SetFormData(map[string]string{
+				"userid":          t.UserId,
+				"token":           t.UserToken,
+				"cloudName":       t.parseCloudName(),
+				"region":          t.CloudRegion,
+				"clusterId":       util.MD5(t.UploadPath),
+				"durationSeconds": fmt.Sprintf("%.0f", t.parseDuration().Seconds()),
+			}).
+			SetResult(&CloudStorageAccountResponse{}).
+			Post(serverURL)
 
-	t.OlaresSpaceSession = queryResp.Data
+		if err != nil {
+			return errors.WithStack(fmt.Errorf("fetch data from cloud error: %v, url: %s", err, serverURL))
+		}
 
-	if isDebug {
+		if resp.StatusCode() != http.StatusOK {
+			return errors.WithStack(fmt.Errorf("fetch data from cloud response error: %d, data: %s", resp.StatusCode(), resp.Body()))
+		}
+
+		queryResp := resp.Result().(*CloudStorageAccountResponse)
+		if queryResp.Code != http.StatusOK { // 506
+			return errors.WithStack(fmt.Errorf("get cloud storage account from cloud error: %d, data: %s",
+				queryResp.Code, queryResp.Message))
+		}
+
+		if queryResp.Data == nil {
+			return errors.WithStack(fmt.Errorf("get cloud storage account from cloud data is empty, code: %d, data: %s", queryResp.Code, queryResp.Message))
+		}
+
+		t.OlaresSpaceSession = queryResp.Data
+
+		if isDebug {
+		}
+
+		return nil
+	}); err != nil {
+		return errors.WithStack(err)
 	}
 
 	return nil
+}
+
+func (t *OlaresSpace) parseCloudName() string {
+	switch t.CloudName {
+	case common.TencentCloudName:
+		return common.TencentCloudName
+	case common.AliCloudName:
+		return common.AliCloudName
+	default:
+		return common.AWSCloudName
+	}
+}
+
+func (t *OlaresSpace) parseDuration() time.Duration {
+	var defaultDuration = 12 * time.Hour
+	if t.Duration == "" {
+		return defaultDuration
+	}
+
+	res, err := strconv.ParseInt(t.Duration, 10, 64)
+	if err != nil {
+		return defaultDuration
+	}
+	dur, err := time.ParseDuration(fmt.Sprintf("%dm", res))
+	if err != nil {
+		return defaultDuration
+	}
+
+	return dur
 }
