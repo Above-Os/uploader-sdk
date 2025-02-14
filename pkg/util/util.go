@@ -3,6 +3,7 @@ package util
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -93,4 +94,9 @@ func IsExist(path string) bool {
 		return false
 	}
 	return true
+}
+
+func Base64encode(s []byte) string {
+	return base64.StdEncoding.EncodeToString(s)
+
 }

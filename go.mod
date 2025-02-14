@@ -1,4 +1,4 @@
-module bytetrade.io/web3os/uploader-sdk
+module bytetrade.io/web3os/backups-sdk
 
 go 1.22.0
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"bytetrade.io/web3os/uploader-sdk/pkg/util"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util/cmd"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
+	"bytetrade.io/web3os/backups-sdk/pkg/util"
+	"bytetrade.io/web3os/backups-sdk/pkg/util/cmd"
+	"bytetrade.io/web3os/backups-sdk/pkg/util/logger"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 )
@@ -538,7 +538,6 @@ func (r *resticManager) Restore(snapshotId string, uploadPath string, target str
 					switch {
 					case math.Abs(status.PercentDone-0.0) < tolerance:
 						if !started {
-							logger.Infof(PRINT_RESTORE_START_MESSAGE, status.TotalFiles, util.FormatBytes(status.TotalBytes))
 							started = true
 						}
 					case math.Abs(status.PercentDone-1.0) < tolerance:
@@ -609,5 +608,5 @@ func (r *resticManager) fileNameTidy(f []string, prefix string) []string {
 }
 
 func (r *resticManager) withTag(name string) []string {
-	return []string{"--tag", fmt.Sprintf("name=%s", name)}
+	return []string{"--tag", fmt.Sprintf("repo_name=%s", name)}
 }
