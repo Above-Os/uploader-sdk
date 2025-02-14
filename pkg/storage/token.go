@@ -1,9 +1,13 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"log"
+	"path"
 	"strconv"
+	"syscall"
 
 	"fmt"
 	"net/http"
@@ -11,14 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"bytetrade.io/web3os/uploader-sdk/pkg/client"
-	"bytetrade.io/web3os/uploader-sdk/pkg/common"
-	"bytetrade.io/web3os/uploader-sdk/pkg/response"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
+	"bytetrade.io/web3os/backups-sdk/pkg/client"
+	"bytetrade.io/web3os/backups-sdk/pkg/common"
+	"bytetrade.io/web3os/backups-sdk/pkg/response"
+	"bytetrade.io/web3os/backups-sdk/pkg/util"
+	"bytetrade.io/web3os/backups-sdk/pkg/util/logger"
 	"github.com/emicklei/go-restful/v3"
 	"github.com/go-resty/resty/v2"
 	"github.com/pkg/errors"
+	"golang.org/x/term"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,32 +32,40 @@ import (
 )
 
 type OlaresSpace struct {
-	UserName    string `json:"user_name"`
-	AccountName string `json:"account_name"`
+	RepoName     string `json:"repo_name"`
+	RepoPassword string `json:"-"`
+	OlaresId     string `json:"olares_id"`
+	OlaresName   string `json:"olares_name"`
 
 	UserId    string `json:"user_id"`
 	UserToken string `json:"user_token"`
 
-	CloudName          string              `json:"cloud_name"`
-	CloudRegion        string              `json:"cloud_region"`
-	UploadPath         string              `json:"upload_path"`
+	BackupType        string `json:"backup_type"`
+	Endpoint          string `json:"endpoint"`
+	AccessKeyId       string `json:"access_key_id"`
+	SecretAccessKey   string `json:"secret_access_key"`
+	BackupToLocalPath string `json:"backup_to_local_path"`
+
+	Path               string              `json:"path"`
 	CloudApiMirror     string              `json:"cloud_api_mirror"`
 	Duration           string              `json:"duration"`
 	OlaresSpaceSession *OlaresSpaceSession `json:"olares_space_session"`
-	Env                map[string]string   `json:"env"`
+	Env                map[string]string   `json:"-"`
+
+	BackupsOperate BackupsOperate `json:"backup_operate"`
 }
 
 type OlaresSpaceSession struct {
-	Cloud      string `json:"cloud"` // "aws", "tencentcloud"
-	Bucket     string `json:"bucket"`
-	Token      string `json:"st"`
-	Prefix     string `json:"prefix"` // "fbcf5f573ed242c28758-342957450633", "did:key:???-55c06979be5e"
-	Secret     string `json:"sk"`
-	Key        string `json:"ak"`
-	Expiration string `json:"expiration"` // "1705550635000",
-	Region     string `json:"region"`     // "us-west-1", "ap-beijing"
-	RepoUrl    string `json:"repo_url"`
-	Password   string `json:"password"`
+	Cloud          string `json:"cloud"`
+	Bucket         string `json:"bucket"`
+	Token          string `json:"st"`
+	Prefix         string `json:"prefix"`
+	Secret         string `json:"secret"`
+	Key            string `json:"key"`
+	Expiration     string `json:"expiration"`
+	Region         string `json:"region"`
+	ResticRepo     string `json:"restic_repo"`
+	ResticPassword string `json:"-"`
 }
 
 type AccountResponse struct {
@@ -99,15 +112,155 @@ type CloudStorageAccountResponse struct {
 	Data *OlaresSpaceSession `json:"data"`
 }
 
-func (t *OlaresSpace) SetRepoUrl(name, password string) {
-	// repoName = <name>_<uid>
-	var repoPrefix = filepath.Join(t.OlaresSpaceSession.Prefix, "restic", name)
-	var domain = fmt.Sprintf("s3.%s.amazonaws.com", t.OlaresSpaceSession.Region)
+func (t *OlaresSpace) SetRepoUrl() {
+	switch t.BackupType {
+	case common.BackupTypeS3:
+		t.formatS3Repo()
+	case common.BackupTypeCos:
+		t.formatCosRepo()
+	case common.BackupTypeLocal:
+		t.formatLocalRepo()
+	default:
+		t.formatOlaresSpaceRepo() // todo distinguish between s3 and cos
+	}
+}
+
+func (t *OlaresSpace) formatOlaresSpaceRepo() {
+	// todo distinguish between s3 and cos
+	var repoPrefix = filepath.Join(t.OlaresSpaceSession.Prefix, "restic", t.RepoName)
+	var domain = fmt.Sprintf("s3.%s.%s", t.OlaresSpaceSession.Region, common.AwsDomain)
 	var repo = filepath.Join(domain, t.OlaresSpaceSession.Bucket, repoPrefix)
 	var repoUrl = fmt.Sprintf("s3:%s", repo)
 
-	t.OlaresSpaceSession.RepoUrl = repoUrl
-	t.OlaresSpaceSession.Password = password
+	t.OlaresSpaceSession.ResticRepo = repoUrl
+	t.OlaresSpaceSession.ResticPassword = t.RepoPassword
+}
+
+func (t *OlaresSpace) formatS3Repo() error {
+	if t.Endpoint == "" {
+		return fmt.Errorf("endpoint is empty")
+	}
+	var endpoint = strings.TrimPrefix(t.Endpoint, "https://")
+	endpoint = strings.TrimRight(endpoint, "/")
+	if strings.EqualFold(endpoint, "") {
+		return fmt.Errorf("endpoint is invalid")
+	}
+
+	var repoSplit = strings.SplitN(endpoint, "/", 2)
+	if repoSplit == nil || len(repoSplit) < 1 {
+		return fmt.Errorf("endpoint is invalid")
+	}
+	var repoBase = repoSplit[0]
+	var repoPrefix = ""
+	if len(repoSplit) >= 2 {
+		repoPrefix = fmt.Sprintf("%s/", repoSplit[1])
+	}
+
+	var repoBaseSplit = strings.SplitN(repoBase, ".", 3)
+	if len(repoBaseSplit) != 3 {
+		return fmt.Errorf("endpoint is invalid")
+	}
+	if repoBaseSplit[2] != common.AwsDomain {
+		return fmt.Errorf("endpoint is invalid")
+	}
+	var bucket = repoBaseSplit[0]
+	var region = repoBaseSplit[1]
+
+	t.OlaresSpaceSession.Key = t.AccessKeyId
+	t.OlaresSpaceSession.Secret = t.SecretAccessKey
+	t.OlaresSpaceSession.Region = region
+	t.OlaresSpaceSession.ResticRepo = fmt.Sprintf("s3:s3.%s.%s/%s/%s%s", region, common.AwsDomain, bucket, repoPrefix, t.RepoName)
+	t.OlaresSpaceSession.ResticPassword = t.RepoPassword
+
+	return nil
+}
+
+func (t *OlaresSpace) formatCosRepo() error {
+	if t.Endpoint == "" {
+		return fmt.Errorf("endpoint is empty")
+	}
+	var endpoint = strings.TrimPrefix(t.Endpoint, "https://")
+	endpoint = strings.TrimRight(endpoint, "/")
+	if strings.EqualFold(endpoint, "") {
+		return fmt.Errorf("endpoint is invalid")
+	}
+
+	var repoSplit = strings.Split(endpoint, "/")
+	if repoSplit == nil || len(repoSplit) < 2 {
+		return fmt.Errorf("endpoint is invalid")
+	}
+
+	var repoBase = repoSplit[0]
+	var repoBucket = repoSplit[1]
+	var repoPrefix = ""
+	if len(repoSplit) > 2 {
+		repoPrefix = fmt.Sprintf("%s/", strings.Join(repoSplit[2:], "/"))
+	}
+
+	var repoBaseSplit = strings.SplitN(repoBase, ".", 3)
+	if repoBaseSplit == nil || len(repoBaseSplit) != 3 {
+		return fmt.Errorf("endpoint is invalid")
+	}
+	if repoBaseSplit[0] != "cos" || repoBaseSplit[2] != common.TencentDomain {
+		return fmt.Errorf("endpoint is invalid")
+	}
+	var repoRegion = repoBaseSplit[1]
+
+	t.OlaresSpaceSession.Key = t.AccessKeyId
+	t.OlaresSpaceSession.Secret = t.SecretAccessKey
+	t.OlaresSpaceSession.Region = repoRegion
+	t.OlaresSpaceSession.ResticRepo = fmt.Sprintf("s3:https://cos.%s.%s/%s/%s%s", repoRegion, common.TencentDomain, repoBucket, repoPrefix, t.RepoName)
+	t.OlaresSpaceSession.ResticPassword = t.RepoPassword
+
+	return nil
+}
+
+func (t *OlaresSpace) formatLocalRepo() error {
+	t.OlaresSpaceSession.ResticRepo = path.Join(t.BackupToLocalPath, t.RepoName)
+	t.OlaresSpaceSession.ResticPassword = t.RepoPassword
+	return nil
+}
+
+func (s *OlaresSpace) EnterPassword() error {
+	if s.BackupsOperate.IsBackup() {
+		fmt.Println("\nPlease create a password for this backup. This password will be required to restore your data in the future. The system will NOT save or store this password, so make sure to remember it. If you lose or forget this password, you will not be able to recover your backup.")
+	}
+	var password []byte
+	var confirmed []byte
+	_ = password
+
+	for {
+		fmt.Print("\nEnter password for repository: ")
+		password, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			log.Fatalf("Failed to read password: %v", err)
+			return err
+		}
+		password = bytes.TrimSpace(password)
+		if len(password) == 0 {
+			continue
+		}
+		confirmed = password
+		if !s.BackupsOperate.IsBackup() {
+			break
+		}
+		fmt.Print("\nRe-enter the password to confirm: ")
+		confirmed, err = term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			log.Fatalf("Failed to read re-enter password: %v", err)
+			return err
+		}
+		if !bytes.Equal(password, confirmed) {
+			fmt.Printf("\nPasswords do not match. Please try again.\n")
+			continue
+		}
+
+		break
+	}
+	s.RepoPassword = string(confirmed)
+	fmt.Printf("\n\n")
+
+	return nil
 }
 
 func (t *OlaresSpace) SetEnv() {
@@ -118,19 +271,20 @@ func (t *OlaresSpace) SetEnv() {
 	t.Env["AWS_ACCESS_KEY_ID"] = t.OlaresSpaceSession.Key
 	t.Env["AWS_SECRET_ACCESS_KEY"] = t.OlaresSpaceSession.Secret
 	t.Env["AWS_SESSION_TOKEN"] = t.OlaresSpaceSession.Token
-	t.Env["RESTIC_REPOSITORY"] = t.OlaresSpaceSession.RepoUrl
-	t.Env["RESTIC_PASSWORD"] = t.OlaresSpaceSession.Password
+	t.Env["RESTIC_REPOSITORY"] = t.OlaresSpaceSession.ResticRepo
+	t.Env["RESTIC_PASSWORD"] = t.OlaresSpaceSession.ResticPassword
 
-	msg := fmt.Sprintf("export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_SESSION_TOKEN=%s\nexport RESTIC_REPOSITORY=%s\nexport RESTIC_PASSWORD=%s\nexport AWS_REGION=%s\n",
+	msg := fmt.Sprintf("export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_SESSION_TOKEN=%s\nexport RESTIC_REPOSITORY=%s\nexport AWS_REGION=%s\n",
 		t.OlaresSpaceSession.Key,
 		t.OlaresSpaceSession.Secret,
 		t.OlaresSpaceSession.Token,
-		t.OlaresSpaceSession.RepoUrl,
-		t.OlaresSpaceSession.Password,
+		t.OlaresSpaceSession.ResticRepo,
 		t.OlaresSpaceSession.Region,
 	)
-	fmt.Println(msg)
-	logger.Debugf(msg)
+
+	_ = msg
+	// fmt.Println(msg)
+	// logger.Debugf("export env: %s", util.Base64encode([]byte(msg)))
 }
 
 func (t *OlaresSpace) GetEnv() map[string]string {
@@ -138,6 +292,9 @@ func (t *OlaresSpace) GetEnv() map[string]string {
 }
 
 func (t *OlaresSpace) RefreshToken(isDebug bool) error {
+	if t.BackupType != common.DefaultBackupType {
+		return nil
+	}
 	if t.UserId != "" && t.UserToken != "" {
 		logger.Infof("retrieving olares space token, userid: %s, usertoken: %s", t.UserId, t.UserToken)
 		err := t.setToken(isDebug)
@@ -157,7 +314,7 @@ func (t *OlaresSpace) RefreshToken(isDebug bool) error {
 		return err
 	}
 
-	logger.Infof("retrieving user %s token", t.UserName)
+	logger.Infof("retrieving user %s token", t.OlaresId)
 	userId, userToken, err := t.getUserToken(podIp, appKey)
 	if err != nil {
 		return err
@@ -186,19 +343,19 @@ func (t *OlaresSpace) SetAccount() error {
 		Steps:    5,
 	}
 
-	var accountName string
+	var olaresName string
 	if err := retry.OnError(backoff, func(err error) bool {
 		return true
 	}, func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		unstructuredUser, err := dynamicClient.Resource(UsersGVR).Get(ctx, t.UserName, metav1.GetOptions{})
+		unstructuredUser, err := dynamicClient.Resource(UsersGVR).Get(ctx, t.OlaresId, metav1.GetOptions{})
 		if err != nil {
 			return errors.WithStack(err)
 		}
 		obj := unstructuredUser.UnstructuredContent()
-		accountName, _, err = unstructured.NestedString(obj, "spec", "email")
+		olaresName, _, err = unstructured.NestedString(obj, "spec", "email")
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -207,7 +364,7 @@ func (t *OlaresSpace) SetAccount() error {
 		return errors.WithStack(err)
 	}
 
-	t.AccountName = accountName
+	t.OlaresName = olaresName
 	return nil
 }
 
@@ -225,7 +382,7 @@ func (t *OlaresSpace) getPodIp() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pods, err := kubeClient.CoreV1().Pods(fmt.Sprintf("user-system-%s", t.UserName)).List(ctx, metav1.ListOptions{
+	pods, err := kubeClient.CoreV1().Pods(fmt.Sprintf("user-system-%s", t.OlaresId)).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=systemserver",
 	})
 	if err != nil {
@@ -285,7 +442,7 @@ func (t *OlaresSpace) getUserToken(podIp string, appKey string) (userid, token s
 
 	client := resty.New().SetTimeout(10 * time.Second)
 	var data = make(map[string]string)
-	data["name"] = fmt.Sprintf("integration-account:space:%s", t.AccountName)
+	data["name"] = fmt.Sprintf("integration-account:space:%s", t.OlaresName)
 	logger.Infof("fetch account from settings: %s", settingsUrl)
 	resp, err := client.R().SetDebug(true).
 		SetHeader(restful.HEADER_ContentType, restful.MIME_JSON).
@@ -354,8 +511,8 @@ func (t *OlaresSpace) setToken(isDebug bool) error {
 				"userid":          t.UserId,
 				"token":           t.UserToken,
 				"cloudName":       t.parseCloudName(),
-				"region":          t.CloudRegion,
-				"clusterId":       util.MD5(t.UploadPath),
+				"region":          t.parseRegion(),
+				"clusterId":       util.MD5(t.Path),
 				"durationSeconds": fmt.Sprintf("%.0f", t.parseDuration().Seconds()),
 			}).
 			SetResult(&CloudStorageAccountResponse{}).
@@ -392,14 +549,21 @@ func (t *OlaresSpace) setToken(isDebug bool) error {
 	return nil
 }
 
+func (t *OlaresSpace) parseRegion() string {
+	if t.BackupType == common.DefaultBackupType {
+		return common.DefaultBackupOlaresRegion
+	}
+	return ""
+}
+
 func (t *OlaresSpace) parseCloudName() string {
-	switch t.CloudName {
-	case common.TencentCloudName:
-		return common.TencentCloudName
-	case common.AliCloudName:
-		return common.AliCloudName
+	switch t.BackupType {
+	case common.BackupTypeCos:
+		return common.BackupTypeCos
+	case common.BackupTypeS3:
+		return common.BackupTypeS3
 	default:
-		return common.AWSCloudName
+		return common.BackupTypeOlaresAWS
 	}
 }
 

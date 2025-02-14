@@ -1,14 +1,14 @@
-package uploadersdk
+package backupssdk
 
 import (
 	"fmt"
 	"path"
 	"path/filepath"
 
-	downloader "bytetrade.io/web3os/uploader-sdk/pkg/download"
-	uploader "bytetrade.io/web3os/uploader-sdk/pkg/upload"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util"
-	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
+	"bytetrade.io/web3os/backups-sdk/pkg/common"
+	storageprovider "bytetrade.io/web3os/backups-sdk/pkg/storage"
+	"bytetrade.io/web3os/backups-sdk/pkg/util"
+	"bytetrade.io/web3os/backups-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -20,41 +20,45 @@ func init() {
 	}
 }
 
-type UploadClient struct {
-	option uploader.Option
+type BackupClient struct {
+	option storageprovider.BackupOption
 }
 
-type UploadClientOption struct {
-	Name                 string
-	UserName             string
-	Password             string
-	CloudName            string
-	CloudRegion          string
-	UploadPath           string
-	CloudApiMirror       string
-	LimitUploadRate      string
-	StorageTokenDuration string
-	BaseDir              string
-	Version              string
-	Logger               *zap.SugaredLogger
+type BackupClientOption struct {
+	RepoName          string
+	OlaresId          string
+	BackupType        string
+	Endpoint          string
+	AccessKeyId       string
+	SecretAccessKey   string
+	BackupToLocalPath string
+
+	Path            string
+	CloudApiMirror  string
+	LimitUploadRate string
+	BaseDir         string
+	Version         string
+	Logger          *zap.SugaredLogger
 }
 
-// upload
-func NewUploadClient(opt *UploadClientOption,
-) *UploadClient {
-	var o = uploader.Option{
-		Name:                 opt.Name,
-		UserName:             opt.UserName,
-		Password:             opt.Password,
-		CloudName:            opt.CloudName,
-		CloudRegion:          opt.CloudRegion,
-		UploadPath:           opt.UploadPath,
-		CloudApiMirror:       opt.CloudApiMirror,
-		LimitUploadRate:      opt.LimitUploadRate,
-		StorageTokenDuration: opt.StorageTokenDuration,
+// backup
+
+func NewBackupClient(opt *BackupClientOption,
+) *BackupClient {
+	var o = storageprovider.BackupOption{
+		RepoName:          opt.RepoName,
+		OlaresId:          opt.OlaresId,
+		BackupType:        opt.BackupType,
+		Endpoint:          opt.Endpoint,
+		AccessKeyId:       opt.AccessKeyId,
+		SecretAccessKey:   opt.SecretAccessKey,
+		BackupToLocalPath: opt.BackupToLocalPath,
+		UploadPath:        opt.Path,
+		CloudApiMirror:    opt.CloudApiMirror,
+		LimitUploadRate:   opt.LimitUploadRate,
 	}
 
-	var client = &UploadClient{
+	var client = &BackupClient{
 		option: o,
 	}
 
@@ -63,12 +67,20 @@ func NewUploadClient(opt *UploadClientOption,
 	return client
 }
 
-func (c *UploadClient) Upload() error {
-	u := &uploader.Upload{}
-	return u.Upload(c.option)
+func (c *BackupClient) Backup() error {
+	if !util.IsExist(c.option.UploadPath) {
+		return errors.WithStack(fmt.Errorf("backup path not exist: %s", c.option.UploadPath))
+	}
+
+	if c.option.BackupType == common.BackupTypeLocal && !util.IsExist(c.option.BackupToLocalPath) {
+		return errors.WithStack(fmt.Errorf("backup to local path not exist: %s", c.option.BackupToLocalPath))
+	}
+
+	u := &storageprovider.Backup{}
+	return u.Backup(c.option)
 }
 
-func (c *UploadClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
+func (c *BackupClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
 	if log != nil {
 		logger.SetLogger(log)
 		return
@@ -80,46 +92,47 @@ func (c *UploadClient) setLogger(baseDir string, version string, log *zap.Sugare
 	}
 
 	jsonLogDir := path.Join(baseDir, "logs")
-	consoleLogDir := path.Join(installerPath, "logs", "backup_upload.log")
+	consoleLogDir := path.Join(installerPath, "logs", "backups_backup.log")
 	logger.InitLog(jsonLogDir, consoleLogDir, true)
 }
 
-//  download
+//  restore
 
-type DownloadClient struct {
-	option downloader.Option
+type RestoreClient struct {
+	option storageprovider.RestoreOption
 }
 
-type DownloadClientOption struct {
-	Name                 string
-	SnapshotId           string
-	UserName             string
-	Password             string
-	CloudName            string
-	CloudRegion          string
-	DownloadPath         string
-	CloudApiMirror       string
-	LimitDownloadRate    string
-	StorageTokenDuration string
-	BaseDir              string
-	Version              string
-	Logger               *zap.SugaredLogger
+type RestoreClientOption struct {
+	RepoName          string
+	SnapshotId        string
+	OlaresId          string
+	BackupType        string
+	Endpoint          string
+	AccessKeyId       string
+	SecretAccessKey   string
+	TargetPath        string
+	CloudApiMirror    string
+	LimitDownloadRate string
+	BaseDir           string
+	Version           string
+	Logger            *zap.SugaredLogger
 }
 
-func NewDownloadClient(opt *DownloadClientOption) *DownloadClient {
-	var o = downloader.Option{
-		Name:              opt.Name,
+func NewRestoreClient(opt *RestoreClientOption) *RestoreClient {
+	var o = storageprovider.RestoreOption{
+		RepoName:          opt.RepoName,
 		SnapshotId:        opt.SnapshotId,
-		UserName:          opt.UserName,
-		Password:          opt.Password,
-		CloudName:         opt.CloudName,
-		CloudRegion:       opt.CloudRegion,
-		DownloadPath:      opt.DownloadPath,
+		OlaresId:          opt.OlaresId,
+		BackupType:        opt.BackupType,
+		Endpoint:          opt.Endpoint,
+		AccessKeyId:       opt.AccessKeyId,
+		SecretAccessKey:   opt.SecretAccessKey,
+		TargetPath:        opt.TargetPath,
 		CloudApiMirror:    opt.CloudApiMirror,
 		LimitDownloadRate: opt.LimitDownloadRate,
 	}
 
-	var client = &DownloadClient{
+	var client = &RestoreClient{
 		option: o,
 	}
 
@@ -128,17 +141,21 @@ func NewDownloadClient(opt *DownloadClientOption) *DownloadClient {
 	return client
 }
 
-func (c *DownloadClient) Download() error {
-	if !util.IsExist(c.option.DownloadPath) {
-		return errors.WithStack(fmt.Errorf("download path not found"))
+func (c *RestoreClient) Restore() error {
+	if c.option.SnapshotId == "" {
+		return errors.WithStack(fmt.Errorf("snapshot-id is empty"))
 	}
 
-	d := &downloader.Download{}
+	if !util.IsExist(c.option.TargetPath) {
+		return errors.WithStack(fmt.Errorf("restore path not found"))
+	}
 
-	return d.Download(c.option)
+	d := &storageprovider.Restore{}
+
+	return d.Restore(c.option)
 }
 
-func (c *DownloadClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
+func (c *RestoreClient) setLogger(baseDir string, version string, log *zap.SugaredLogger) {
 	if log != nil {
 		logger.SetLogger(log)
 		return
@@ -150,6 +167,6 @@ func (c *DownloadClient) setLogger(baseDir string, version string, log *zap.Suga
 	}
 
 	jsonLogDir := path.Join(baseDir, "logs")
-	consoleLogDir := path.Join(installerPath, "logs", "backup_download.log")
+	consoleLogDir := path.Join(installerPath, "logs", "backups_restore.log")
 	logger.InitLog(jsonLogDir, consoleLogDir, true)
 }

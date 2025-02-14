@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	"bytetrade.io/web3os/uploader-sdk/pkg/util/logger"
+	"bytetrade.io/web3os/backups-sdk/pkg/util/logger"
 	"github.com/pkg/errors"
 )
 
